@@ -1,0 +1,74 @@
+---
+title: "Informe de la práctica de bioseguridad"
+author: "Nombre y grupo"
+lang: es
+format:
+  html:
+    embed-resources: true
+---
+
+<!-- Guardar una copia de este archivo como entrega.qmd en la RAIZ del proyecto.
+     Ejecutar source("ejecutar_todo.R") antes de Render.
+     Para el informe no se requiere ejecutar codigo: las figuras son archivos. -->
+
+## 1. Diagnóstico de salud pública
+
+Centro con mayor cambio calculable, puntos y categoría: **Completar**.
+
+Explicación del dato ausente y evidencia que solicitaría: **Completar**.
+
+Dimensión más débil en Z1 inicial y por qué no basta el total: **Completar**.
+
+Una pregunta y evidencia para cada fuente de información: **Completar**.
+
+![Diagnóstico simulado](resultados/01_agudelo_seguimiento.png)
+
+Conclusión del módulo y límite de interpretación: **Completar**.
+
+## 2. Brechas de bioseguridad
+
+Totales y categorías de Z2 y Z4: **Completar**.
+
+Comparación entre brecha absoluta y porcentual de Z1: **Completar**.
+
+Dos prioridades y su justificación por ruta y consecuencias: **Completar**.
+
+Interpretación de 59 puntos y laguna de la fuente: **Completar**.
+
+![Brechas simuladas en Z1](resultados/02_dulzaines_brechas.png)
+
+Conclusión del módulo y límite de interpretación: **Completar**.
+
+## 3. Evaluación de la intervención
+
+Unidad del ensayo, bloque y por qué las superficies no son réplicas independientes:
+**Completar**.
+
+Escenario con menor media, diferencia, reducción y valor p ajustado: **Completar**.
+
+Interpretación de comparaciones sin diferencia detectada: **Completar**.
+
+Razón para excluir controles previos y fuente del resultado principal: **Completar**.
+
+Dos límites para inferir enfermedad a partir del trazador: **Completar**.
+
+![Comparación por cuidador](resultados/03_jensen_pareado.png)
+
+Conclusión del módulo: **Completar**.
+
+## 4. Plan de mejora del caso ficticio
+
+| Hallazgo y evidencia | Ruta o consecuencia | Medida | Responsable y plazo propuesto | Indicador, meta y método |
+|---|---|---|---|---|
+| Diagnóstico/documentación | Completar | Completar | Completar | Completar |
+| Brecha estructural u operativa | Completar | Completar | Completar | Completar |
+| Manejo de terrarios | Completar | Completar | Completar | Completar |
+
+## 5. Reflexión y reproducibilidad
+
+¿Qué responsabilidad veterinaria excede el control de enfermedades transmisibles,
+según la lectura de Agudelo-Suarez (2017)? **Completar**.
+
+Versión de R, comando usado y cambios realizados al código: **Completar**.
+
+Fuentes consultadas: **Completar con las referencias de los artículos utilizados**.

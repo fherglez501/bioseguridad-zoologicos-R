@@ -1,0 +1,10 @@
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+.quarto/
+practica_files/
+resultados/*
+!resultados/LEEME.md
+entrega.html
+entrega_files/

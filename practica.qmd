@@ -1,0 +1,282 @@
+---
+title: "Diagnosticar, priorizar y evaluar la bioseguridad con R"
+subtitle: "Clínica, Salud Pública y Bioseguridad · Práctica guiada"
+lang: es
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    embed-resources: true
+    code-fold: false
+    theme: cosmo
+execute:
+  echo: true
+  warning: true
+  message: false
+  error: false
+---
+
+## Propósito y escenario
+
+Al concluir, podrá **calcular un diagnóstico docente de salud pública, localizar
+brechas ponderadas y comparar cuatro medidas de bioseguridad conservando el
+emparejamiento por cuidador**. Elaborará una recomendación apoyada en tablas,
+figuras y límites de interpretación.
+
+Usted integra un equipo veterinario que debe revisar cinco centros ficticios y
+proponer una mejora para el manejo de terrarios de anfibios o reptiles. Primero
+realiza un diagnóstico general; después identifica las brechas; finalmente
+examina una simulación de transferencia entre recintos.
+
+**Todos los datos son simulados.** Los nombres Z1–Z5 y C01–C10 no identifican
+instituciones ni personas. Esta es una actividad de análisis en computadora:
+no requiere animales, cultivos, patógenos ni manipulación de trazadores.
+
+Tiempo propuesto: 180 minutos, individual o en parejas. Conserve el orden de
+las tres etapas. Consulte `docs/metodologia_y_fuentes.md` para distinguir los
+elementos publicados de las adaptaciones docentes.
+
+## Preparación: tres herramientas de R
+
+Abra el proyecto `.Rproj`. El panel **Files** debe mostrar las carpetas `R` y
+`datos`. La ruta de trabajo será la raíz del proyecto; no necesita `setwd()`.
+
+```{r}
+# source() lee y ejecuta un archivo de codigo.
+source("R/funciones.R")
+dir.create("resultados", showWarnings = FALSE)
+
+# <- guarda un resultado con un nombre; $ selecciona una columna.
+ejemplo <- data.frame(centro = c("Z1", "Z2"), puntos = c(57, 72))
+ejemplo$puntos
+
+# [filas, columnas] selecciona una parte de una tabla.
+ejemplo[ejemplo$puntos >= 60, ]
+```
+
+**Antes de avanzar:** identifique dónde aparecen la tabla y el vector de
+puntos. `NA` significa información ausente; no equivale al número cero.
+
+## 1. Agudelo: diagnóstico de salud pública
+
+### Del artículo a la práctica
+
+Agudelo-Suárez y Villamil-Jiménez (2009) organizaron cuatro instrumentos según
+la fuente de información. Consideraron salud animal, salud ambiental,
+seguridad, conservación y educación. En esta versión abreviada se proponen
+20 indicadores docentes con respuesta de 0 a 4, cada uno con máximo de 20
+puntos. El total máximo es 400. **Estos ítems y sus pesos no son una reproducción
+del instrumento validado.**
+
+Se utiliza la clasificación publicada solo para mostrar el algoritmo: 0–99
+deficiente; 100–349 regular; 350–400 bueno. Una categoría global puede ocultar
+una dimensión débil; por ello también se revisa el perfil.
+
+### Leer y comprender los datos
+
+```{r}
+datos_a <- leer_csv("agudelo_respuestas.csv")
+head(datos_a)
+table(datos_a$visita)
+sum(is.na(datos_a$respuesta))  # Contar respuestas desconocidas.
+```
+
+Una fila es un indicador de un centro en una visita. Hay cinco centros y dos
+visitas. En este caso simulado, el seguimiento incorpora un mayor cumplimiento
+programado; no permite atribuir el cambio a una intervención real.
+
+### Calcular el total y representar el cambio
+
+Abra `R/01_agudelo.R` y localice la conversión
+`puntos <- respuesta / 4 * maximo`. Por ejemplo, respuesta 3 obtiene 15 de 20.
+El script suma únicamente cuando están disponibles los 20 indicadores.
+
+```{r}
+source("R/01_agudelo.R")
+# Total por centro y visita, con indicador de integridad.
+agudelo_totales
+cambio
+```
+
+```{r, echo=FALSE}
+knitr::include_graphics("resultados/01_agudelo_seguimiento.png")
+```
+
+**Interpretación guiada:** una mejora de puntos puede ocurrir sin cambio de
+categoría porque la banda regular es amplia. Un total incompleto no permite
+comparar el cambio. No complete datos desconocidos con cero ni aumente el
+resultado proporcionalmente para forzarlo a 400.
+
+### Ejercicio 1
+
+1. Identifique el centro con mayor cambio calculable e indique cuántos puntos ganó.
+2. Explique por qué no se calcula el cambio de Z5. ¿Qué evidencia solicitaría?
+3. Consulte `01_agudelo_perfiles.csv`. Para Z1 en la visita inicial, identifique
+   su dimensión con menor porcentaje y explique por qué el total no basta.
+4. Proponga una pregunta para cada una de las cuatro fuentes de información
+   y señale qué evidencia permitiría corroborar la respuesta.
+
+## 2. Dulzaines: brechas de bioseguridad
+
+### Conservar las ponderaciones
+
+Dulzaines Castañeda et al. (2010) proponen seis acápites con máximos de
+9, 20, 16, 29, 18 y 8 puntos. Sumarlos produce un máximo de 100. Un punto
+de esta escala no representa la misma dimensión que un punto del índice
+docente anterior: **no se deben promediar ambos puntajes**.
+
+La práctica utiliza subtotales ficticios. No reconstruye el anexo por ítems.
+
+```{r}
+leer_csv("catalogo_dulzaines.csv")
+source("R/02_dulzaines.R")
+dulzaines_totales
+```
+
+Observe el tratamiento de valores menores de 60: el artículo no les asigna
+una categoría. El programa informa la laguna. No es válido inventar un umbral
+y atribuirlo a los autores.
+
+### Diferenciar dos preguntas de priorización
+
+La **brecha en puntos** muestra cuánto falta respecto del máximo ponderado.
+La **brecha porcentual** muestra la fracción que falta dentro de cada acápite.
+Sus órdenes pueden diferir.
+
+```{r}
+# Cambie Z1 por otro centro y vuelva a ejecutar estas lineas.
+centro_a_revisar <- "Z1"
+revision <- d[d$centro == centro_a_revisar, ]
+revision[order(revision$brecha_puntos, decreasing = TRUE),
+         c("seccion", "maximo", "obtenido", "brecha_puntos", "brecha_pct")]
+```
+
+```{r, echo=FALSE}
+knitr::include_graphics("resultados/02_dulzaines_brechas.png")
+```
+
+La figura generada por el script corresponde a Z1. Para graficar otro centro,
+modifique `centro_elegido` dentro de `R/02_dulzaines.R` y vuelva a ejecutarlo.
+
+### Ejercicio 2
+
+1. Indique el total y la clasificación de Z2 y Z4.
+2. Para Z1, compare el acápite con mayor brecha en puntos con el de mayor
+   brecha porcentual. Explique la diferencia en una frase.
+3. Seleccione dos brechas para atender primero. Justifique por ruta de
+   exposición y consecuencias, además de su puntaje.
+4. Explique qué concluiría sobre un centro con 59 puntos y qué información
+   falta en la clasificación publicada.
+
+## 3. Jensen: ¿funciona la medida en la simulación?
+
+### Introducción al diseño experimental
+
+Jensen, Jensen y Bertelsen (2021) evaluaron transferencia de trazador UV.
+Diez cuidadores realizaron los cuatro escenarios en orden aleatorizado:
+
+| Escenario | Guantes entre terrarios | Esponja |
+|---|---|---|
+| Control | Sin cambio | Compartida |
+| Guantes | Cambio en cada terrario | Compartida |
+| Utensilios | Sin cambio | Dedicada a cada terrario |
+| Combinados | Cambio en cada terrario | Dedicada a cada terrario |
+
+Cada ensayo incluye diez terrarios. Los dos primeros son controles previos;
+el tercero es la fuente; los siete siguientes son los receptores. Cada terrario
+tiene cuatro superficies, calificadas de 0 a 3. Por ello, el total principal es:
+
+$$7\ \text{terrarios} \times 4\ \text{superficies} \times 3\ \text{puntos}=84.$$
+
+El máximo de 84 pertenece a **cada ensayo cuidador × escenario**, no al estudio
+completo. Los datos individuales de los artículos no se utilizaron en la simulación.
+
+```{r}
+datos_j <- leer_csv("jensen_uv.csv")
+head(datos_j)
+nrow(datos_j)  # 1600 registros de superficies.
+leer_csv("jensen_orden_ensayos.csv")[1:8, ]
+```
+
+El orden de los escenarios cambia entre cuidadores; el recorrido de terrarios
+se mantiene fijo. El simulador no incorpora un efecto de aprendizaje por orden:
+en un experimento real habría que examinarlo y prevenir arrastre entre ensayos.
+
+### Agrupar antes de comparar
+
+```{r}
+source("R/03_jensen.R")
+resumen_jensen
+```
+
+```{r, echo=FALSE}
+knitr::include_graphics("resultados/03_jensen_pareado.png")
+knitr::include_graphics("resultados/03_jensen_recorrido.png")
+```
+
+Cada línea gris corresponde a un cuidador. La línea de medias ayuda a resumir,
+pero no sustituye la variación individual. Revise si todos muestran el mismo patrón.
+
+### Comparación pareada y tamaño del cambio
+
+Usaremos Friedman para comparar los cuatro escenarios dentro de cada cuidador.
+Después, tres comparaciones Wilcoxon pareadas contra control con ajuste de
+Holm. El artículo reportó ANOVA y Tukey; esta adaptación hace explícitas las
+mediciones repetidas. No intenta reproducir sus valores p.
+
+```{r}
+prueba_friedman
+comparaciones[, c("escenario", "diferencia_media", "reduccion_medias_pct", "p_holm")]
+```
+
+Una diferencia intervención menos control negativa significa menor puntaje UV.
+La reducción relativa compara medias; **no es eficacia contra una infección**.
+El valor p no mide la magnitud del cambio ni la probabilidad de que la hipótesis
+nula sea verdadera. Con diez cuidadores, empates y una prueba aproximada,
+interprete siempre junto con la figura y las diferencias.
+
+### Ejercicio 3
+
+1. Explique por qué 1,600 superficies no equivalen a 1,600 cuidadores independientes.
+2. Identifique el escenario con menor media UV y cuantifique la diferencia y
+   reducción relativa frente al control.
+3. Compare la conclusión usando diferencias y usando `p_holm`. Si no detecta
+   diferencia en una comparación, ¿demuestra que las medidas son equivalentes?
+4. Explique por qué deben excluirse la fuente y los controles previos del total
+   principal de 84.
+5. Mencione dos limitaciones del trazador para inferir transmisión de enfermedad.
+
+## 4. Integrar: de los resultados al plan de mejora
+
+Complete `plantillas/entrega.qmd` con una conclusión por módulo y una matriz
+de tres acciones. La matriz es un recurso docente adicional; no se atribuye
+a ninguna de las metodologías originales.
+
+| Hallazgo y evidencia | Ruta de exposición o consecuencia | Medida propuesta | Responsable y plazo propuesto | Cómo verificar |
+|---|---|---|---|---|
+| Completar | Completar | Completar | Completar | Indicador, meta y método |
+
+Incluya una acción de diagnóstico/documentación, una de bioseguridad
+estructural u operativa y una prueba de la intervención de manejo de terrarios.
+Los responsables y plazos son propuestas para el caso ficticio.
+
+**Producto:** informe de 4–6 páginas o equivalente en HTML, tres conclusiones,
+al menos tres figuras (una por módulo), respuestas de los ejercicios y matriz
+de mejora. Si el HTML excede esa longitud, priorice respuestas breves; el código
+queda en el proyecto y no necesita copiarlo íntegramente al informe.
+
+**Criterios propuestos:** cálculo e integridad 25%; interpretación y límites
+25%; diseño experimental y comparación 25%; plan verificable 20%; claridad y
+reproducibilidad 5%. Estos criterios suman 100% de esta práctica; no modifican
+las ponderaciones oficiales de la asignatura.
+
+## Lecturas
+
+- Agudelo-Suárez y Villamil-Jiménez (2009), métodos y tablas 1–2.
+- Dulzaines Castañeda et al. (2010), máximos, clasificación y anexo 1.
+- Jensen et al. (2021), diseño experimental y escala UV.
+- Agudelo-Suarez (2017), reflexión de cierre: ¿qué responsabilidades de salud
+  pública exceden el control de enfermedades transmisibles?
+
+Referencias completas y decisiones de adaptación:
+`docs/metodologia_y_fuentes.md`.
