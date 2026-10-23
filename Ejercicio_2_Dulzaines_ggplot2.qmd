@@ -1,0 +1,220 @@
+---
+title: "Ejercicio 2 | Dulzaines: diagnóstico y prioridades de bioseguridad"
+subtitle: "Práctica guiada en RStudio · datos simulados"
+lang: es
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: false
+    theme: cosmo
+    embed-resources: true
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+> **Preparación:** abrir `bioseguridad-zoologicos.Rproj` y ejecutar este `.qmd` desde la raíz del repositorio. Se leen exclusivamente los CSV en `datos/`; no se sobrescriben archivos originales. Los datos son **simulados** y la puntuación no equivale a una probabilidad de infección.
+
+## Objetivos
+
+1. Calcular el total de seis acápites ponderados (máximo 100).
+2. Aplicar correctamente las bandas de clasificación publicadas sin inventar categorías para 0–59.
+3. Distinguir brecha absoluta (puntos) y relativa (porcentaje del máximo del acápite).
+4. Formular dos prioridades sustentadas en exposición, consecuencias y evidencia.
+
+## Preparación de bibliotecas y archivos
+
+```{r}
+# Instalar pacman solo una vez, si aún no está disponible:
+if (!requireNamespace("pacman", quietly = TRUE)) install.packages("pacman")
+pacman::p_load(ggplot2, tidyverse, knitr)
+
+ruta_datos <- "datos"
+archivos <- file.path(ruta_datos, c("catalogo_dulzaines.csv", "dulzaines_subtotales.csv"))
+if (!all(file.exists(archivos))) {
+  stop("No se encuentran los CSV. Abra el proyecto .Rproj desde su carpeta raíz.")
+}
+catalogo <- readr::read_csv(archivos[1], show_col_types = FALSE)
+subtotales <- readr::read_csv(archivos[2], show_col_types = FALSE)
+glimpse(catalogo)
+glimpse(subtotales)
+```
+
+## 1. Verificación de calidad y unión de tablas
+
+```{r}
+stopifnot(
+  all(c("seccion", "nombre", "maximo") %in% names(catalogo)),
+  all(c("centro", "seccion", "obtenido") %in% names(subtotales)),
+  !anyDuplicated(catalogo$seccion),
+  !anyDuplicated(subtotales[c("centro", "seccion")]),
+  sum(catalogo$maximo) == 100
+)
+d <- subtotales %>%
+  left_join(catalogo, by = "seccion") %>%
+  mutate(
+    centro = factor(centro, levels = paste0("Z", 1:5)),
+    seccion = factor(seccion, levels = catalogo$seccion),
+    brecha_puntos = maximo - obtenido,
+    cumplimiento_pct = if_else(maximo > 0, 100 * obtenido / maximo, NA_real_),
+    brecha_pct = 100 - cumplimiento_pct
+  )
+if (any(is.na(d$maximo)) || any(d$obtenido < 0 | d$obtenido > d$maximo, na.rm = TRUE)) {
+  stop("Catálogo incompleto o subtotales fuera de rango.")
+}
+if (any(count(d, centro)$n != 6)) stop("Se requieren seis acápites por centro.")
+knitr::kable(d %>% select(centro, seccion, nombre, maximo, obtenido, brecha_puntos, brecha_pct) %>%
+  mutate(brecha_pct = round(brecha_pct, 1)))
+```
+
+**Pausa didáctica:** un acápite con máximo 29 puede tener una brecha absoluta mayor que otro con máximo 9, aun cuando su porcentaje faltante sea menor.
+
+## 2. Total y clasificación por centro
+
+```{r}
+clasificar <- function(x) {
+  case_when(
+    is.na(x) ~ "Incompleto",
+    x >= 90 & x <= 100 ~ "Protegido",
+    x >= 80 & x < 90 ~ "Medianamente protegido",
+    x >= 60 & x < 80 ~ "Desprotegido",
+    x >= 0 & x < 60 ~ "Fuera del intervalo publicado",
+    TRUE ~ "Valor no válido"
+  )
+}
+dulzaines_totales <- d %>%
+  group_by(centro) %>%
+  summarise(
+    apartados = n(),
+    respondidos = sum(!is.na(obtenido)),
+    total = if (anyNA(obtenido)) NA_real_ else sum(obtenido),
+    .groups = "drop"
+  ) %>%
+  mutate(categoria = clasificar(total))
+knitr::kable(dulzaines_totales)
+```
+
+```{r, fig-width=10, fig-height=5.3}
+ggplot(dulzaines_totales, aes(centro, total, fill = categoria)) +
+  geom_col(width = .66, na.rm = TRUE) +
+  geom_hline(yintercept = c(60, 80, 90), linetype = "dashed",
+             color = "#D55E00", linewidth = .45) +
+  geom_text(aes(label = if_else(is.na(total), "SD", as.character(total))),
+            vjust = -0.45, size = 4.5, na.rm = TRUE) +
+  scale_fill_manual(values = c(
+    "Fuera del intervalo publicado" = "#9CA3AF",
+    "Desprotegido" = "#D97706",
+    "Medianamente protegido" = "#2563EB",
+    "Protegido" = "#087F8C",
+    "Incompleto" = "#64748B"
+  ), drop = FALSE) +
+  scale_y_continuous(breaks = seq(0, 100, 20), limits = c(0, 105),
+                     expand = expansion(mult = c(0, 0))) +
+  labs(title = "Puntaje global de bioseguridad | SIMULADO",
+       subtitle = "Seis acápites ponderados; máximo 100 puntos",
+       x = "Centro", y = "Puntos (0–100)", fill = "Clasificación",
+       caption = "Los valores menores de 60 no tienen clasificación publicada.") +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.major.x = element_blank(), legend.position = "bottom")
+```
+
+**Actividad 2.1:** identifique el total y la categoría de Z2 y Z4. Justifique la clasificación usando las bandas publicadas.
+
+## 3. Brechas absolutas y porcentuales en Z1
+
+```{r}
+centro_elegido <- "Z1"  # Pruebe con Z2, Z3, Z4 o Z5
+foco <- d %>% filter(centro == centro_elegido)
+orden_puntos <- foco %>% arrange(desc(brecha_puntos))
+orden_porcentaje <- foco %>% arrange(desc(brecha_pct))
+knitr::kable(orden_puntos %>% select(seccion, nombre, maximo, obtenido, brecha_puntos, brecha_pct))
+knitr::kable(orden_porcentaje %>% select(seccion, nombre, brecha_puntos, brecha_pct))
+```
+
+```{r, fig-width=10, fig-height=5.5}
+foco_largo <- foco %>%
+  select(seccion, brecha_puntos, brecha_pct) %>%
+  pivot_longer(cols = c(brecha_puntos, brecha_pct),
+               names_to = "metrica", values_to = "valor") %>%
+  mutate(metrica = recode(metrica,
+         brecha_puntos = "Brecha absoluta (puntos)",
+         brecha_pct = "Brecha relativa (%)"))
+ggplot(foco_largo, aes(x = reorder(as.character(seccion), valor), y = valor)) +
+  geom_col(fill = "#D97706", width = .68) +
+  geom_text(aes(label = round(valor, 1)), hjust = -.15, size = 3.8) +
+  coord_flip() +
+  facet_wrap(~metrica, scales = "free_x", ncol = 2) +
+  scale_y_continuous(expand = expansion(mult = c(0, .16))) +
+  labs(title = paste("Comparación de brechas en", centro_elegido),
+       subtitle = "Dos criterios de priorización que NO deben confundirse",
+       x = "Acápite", y = NULL,
+       caption = "Puntos y porcentajes están en escalas distintas.") +
+  theme_minimal(base_size = 12) +
+  theme(strip.text = element_text(face = "bold"), panel.grid.major.y = element_blank())
+```
+
+```{r, fig-width=10, fig-height=5}
+ggplot(d, aes(x = seccion, y = centro, fill = brecha_pct)) +
+  geom_tile(color = "white", linewidth = 1) +
+  geom_text(aes(label = if_else(is.na(brecha_pct), "SD",
+                                paste0(round(brecha_pct, 1), "%"))), size = 3.6) +
+  scale_fill_gradient(low = "#F1F5F9", high = "#C2410C",
+                      na.value = "grey80", name = "Brecha (%)") +
+  labs(title = "Mapa de calor: brechas relativas por centro y acápite",
+       x = "Acápite", y = "Centro", caption = "Más intenso = mayor proporción faltante.") +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid = element_blank())
+```
+
+**Actividad 2.2:** señale el acápite con mayor brecha en puntos y el de mayor brecha porcentual para Z1. ¿Por qué no coinciden?
+
+## 4. Priorización sanitaria: de puntuación a decisión
+
+Los puntajes no son riesgos epidemiológicos directos. Para decidir prioridades, documente además una ruta plausible de exposición, consecuencias, evidencia verificable y viabilidad.
+
+| Acápite | Ruta de exposición posible | Evidencia a solicitar |
+|---|---|---|
+| D1 Ubicación y traslado | Movimiento de animales, personas o materiales | Rutas, registros de ingreso, cuarentena |
+| D2 Saneamiento | Fómites, agua, superficies contaminadas | POE, bitácoras, verificación en campo |
+| D3 Alimentación y agua | Insumos o agua contaminados | Control de proveedores, análisis de agua |
+| D4 Diagnóstico y vigilancia | Detección tardía o subregistro de eventos | Historias clínicas y vigilancia |
+| D5 Exhibiciones | Contactos y barreras insuficientes | Inspección de recintos y flujo de visitas |
+| D6 Medicina preventiva | Prevención o respuesta incompleta | Programas y registros clínicos |
+
+Estas rutas son **hipótesis de exposición para discutir**, no hechos demostrados en los cinco centros.
+
+## 5. Ejercicio 2: respuestas guiadas
+
+**1.** Indique el total y clasificación de Z2 y Z4. Ejecute:
+
+```{r}
+dulzaines_totales %>% filter(centro %in% c("Z2", "Z4")) %>%
+  knitr::kable()
+```
+
+**2.** Compare las mayores brechas en Z1:
+
+```{r}
+foco %>% slice_max(brecha_puntos, n = 1, with_ties = TRUE) %>%
+  select(seccion, nombre, brecha_puntos) %>% knitr::kable()
+foco %>% slice_max(brecha_pct, n = 1, with_ties = TRUE) %>%
+  select(seccion, nombre, brecha_pct) %>% knitr::kable()
+```
+
+**3.** Seleccione dos brechas para intervenir. Redacte una recomendación por cada una que contenga: brecha, ruta de exposición plausible, consecuencia, evidencia que falta, responsable e indicador de verificación.
+
+**4.** ¿Cómo interpretar 59 puntos?
+
+```{r}
+clasificar(c(59, 60, 79, 80, 89, 90, 100))
+```
+
+**Discusión:** no adjudique a 59 la categoría “desprotegido” como si estuviera definida en el artículo. Señale el intervalo no cubierto.
+
+## 6. Síntesis y productos
+
+Entregue una tabla de totales, una gráfica de brechas, dos prioridades justificadas y una reflexión sobre por qué los instrumentos Agudelo y Dulzaines no deben promediarse.
+
+**Referencia metodológica:** Dulzaines Castañeda, Cepero Rodríguez y Lazo Pérez (2010), propuesta de metodología para evaluación de bioseguridad en zoológicos tradicionales; consulte `docs/metodologia_y_fuentes.md` del repositorio.

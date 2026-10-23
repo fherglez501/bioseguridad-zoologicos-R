@@ -1,0 +1,449 @@
+---
+title: "Salud pública en zoológicos: línea de base y seguimiento"
+subtitle: "Práctica en R | Adaptación docente de Agudelo et al. — datos simulados"
+author: "Práctica docente de Clínica, Salud Pública y Bioseguridad"
+lang: es
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: false
+    code-tools: true
+    theme: cosmo
+    embed-resources: true
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+# Propósito y objetivos
+
+En esta sesión compararemos el puntaje global de cinco centros zoológicos entre una visita inicial y una visita de seguimiento, identificaremos mejoras por dimensión y analizaremos la trazabilidad de las respuestas de un instrumento de salud pública. Los datos son **simulados** y el instrumento es una **adaptación docente no validada**; sus puntajes no demuestran por sí solos reducciones de riesgo sanitario ni efectos causales.
+
+Al finalizar podrás: (1) calcular el cambio absoluto y relativo de puntajes; (2) reconocer qué hacer con datos faltantes; (3) identificar dimensiones prioritarias; y (4) formular preguntas y solicitar evidencia para corroborarlas.
+
+## Archivos y estructura de trabajo
+
+Coloca los CSV en la carpeta del proyecto de RStudio, preferentemente junto a este archivo `.qmd`:
+
+- `01_agudelo_perfiles.csv`: centro, visita, concepto, puntos, maximo y porcentaje.
+- CSV de totales: centro, visita, respondidos, esperados, puntaje_400 y categoria.
+- CSV de respuestas por ítem: item, centro, visita, respuesta, procedencia, concepto, indicador, instrumento, maximo, origen y puntos.
+
+**Alternativa:** si los objetos `agudelo_totales`, `agudelo_perfiles` y `a` ya están cargados en tu sesión interactiva, puedes ejecutar los fragmentos por separado. Para **Render** (una sesión limpia), necesitas los archivos CSV o ajustar sus rutas en el bloque de carga. El bloque siguiente ofrece además la posibilidad de reconstruir los totales y perfiles desde `a`, con un aviso explícito.
+
+# 1. Preparación
+
+```{r}
+#| label: configuracion
+#| results: hide
+if (!requireNamespace("pacman", quietly = TRUE)) install.packages("pacman")
+pacman::p_load(ggplot2, tidyverse, knitr)
+
+# Búsqueda de archivos: ajusta estos nombres a los que tengas.
+archivo_perfiles <- "01_agudelo_perfiles.csv"
+archivo_totales  <- "01_agudelo_totales.csv"
+archivo_items    <- "01_agudelo_items.csv"
+
+# Carga reproducible: los CSV tienen prioridad para garantizar Render.
+# Si no existe el archivo, reutiliza objetos ya presentes en Environment.
+if (file.exists(archivo_items)) {
+  a <- readr::read_csv(archivo_items, show_col_types = FALSE)
+}
+if (file.exists(archivo_perfiles)) {
+  agudelo_perfiles <- readr::read_csv(archivo_perfiles, show_col_types = FALSE)
+}
+if (file.exists(archivo_totales)) {
+  agudelo_totales <- readr::read_csv(archivo_totales, show_col_types = FALSE)
+}
+
+# Reconstruir perfiles desde ítems si aún no existe el objeto.
+if (!exists("agudelo_perfiles") && exists("a")) {
+  message("Reconstruyendo agudelo_perfiles desde 'a'.")
+  agudelo_perfiles <- a %>%
+    group_by(centro, visita, concepto) %>%
+    summarise(
+      puntos = if (anyNA(puntos)) NA_real_ else sum(puntos),
+      maximo = sum(maximo),
+      porcentaje = 100 * puntos / maximo,
+      .groups = "drop"
+    )
+}
+
+# Reconstruir totales desde ítems si aún no existe el objeto.
+# Supuesto docente: 20 ítems, cada uno con puntuación máxima de 20.
+if (!exists("agudelo_totales") && exists("a")) {
+  message("Reconstruyendo agudelo_totales desde 'a'.")
+  agudelo_totales <- a %>%
+    group_by(centro, visita) %>%
+    summarise(
+      respondidos = sum(!is.na(respuesta)),
+      esperados = n(),
+      puntaje_400 = if (anyNA(puntos)) NA_real_ else sum(puntos),
+      .groups = "drop"
+    ) %>%
+    mutate(categoria = NA_character_)
+}
+
+faltantes <- c(
+  if (!exists("agudelo_totales")) "agudelo_totales",
+  if (!exists("agudelo_perfiles")) "agudelo_perfiles",
+  if (!exists("a")) "a"
+)
+if (length(faltantes)) {
+  stop(paste0(
+    "Faltan los objetos: ", paste(faltantes, collapse = ", "), ". ",
+    "Coloca los archivos CSV en el directorio de trabajo y ajusta ",
+    "archivo_totales, archivo_perfiles y archivo_items. ",
+    "Para renderizar no basta con que los objetos estén en Environment."
+  ))
+}
+
+stopifnot(
+  all(c("centro", "visita", "puntaje_400", "respondidos", "esperados") %in% names(agudelo_totales)),
+  all(c("centro", "visita", "concepto", "puntos", "maximo", "porcentaje") %in% names(agudelo_perfiles)),
+  all(c("item", "centro", "visita", "respuesta", "puntos", "indicador", "instrumento") %in% names(a))
+)
+```
+
+## Exploración inicial
+
+```{r}
+glimpse(agudelo_totales)
+glimpse(agudelo_perfiles)
+glimpse(a)
+
+# Verificar que cada combinación tenga una única observación:
+agudelo_totales %>% count(centro, visita) %>% filter(n != 1)
+agudelo_perfiles %>% count(centro, visita, concepto) %>% filter(n != 1)
+```
+
+Si estas últimas tablas muestran filas, revisa duplicados antes de continuar: `pivot_wider()` presupone una medición por combinación.
+
+# 2. Puntaje global: línea de base y seguimiento
+
+Cada centro puede alcanzar un máximo de **400 puntos**. La línea discontinua a 100 y 350 puntos es una **referencia gráfica docente**, no un umbral sanitario validado.
+
+```{r}
+#| label: grafica-linea-base
+#| fig-width: 11
+#| fig-height: 7
+#| fig-cap: "Comparación de la evaluación inicial y el seguimiento (datos simulados)."
+datos_grafica <- agudelo_totales %>%
+  mutate(
+    centro = factor(centro, levels = paste0("Z", 1:5)),
+    visita = factor(visita, levels = c("Inicial", "Seguimiento"))
+  )
+
+ggplot(datos_grafica,
+       aes(x = centro, y = puntaje_400, fill = visita)) +
+  geom_col(
+    position = position_dodge(width = 0.75),
+    width = 0.68,
+    color = "black",
+    linewidth = 0.3,
+    na.rm = TRUE
+  ) +
+  geom_hline(
+    yintercept = c(100, 350),
+    linetype = "dashed",
+    color = "#D55E00",
+    linewidth = 0.4
+  ) +
+  scale_fill_manual(
+    values = c("Inicial" = "#94A3B8", "Seguimiento" = "#087F8C"),
+    drop = FALSE
+  ) +
+  scale_y_continuous(
+    breaks = seq(0, 400, 100),
+    limits = c(0, 400),
+    expand = expansion(mult = c(0, 0))
+  ) +
+  labs(
+    title = "Salud pública: línea de base y seguimiento | SIMULADO",
+    x = NULL,
+    y = "Puntaje docente (0–400)",
+    fill = NULL,
+    caption = "Z5 inicial: dato faltante; no se representa como cero"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 16),
+    legend.position = c(0.08, 0.92),
+    legend.justification = c(0, 1),
+    legend.background = element_blank(),
+    axis.text.x = element_text(size = 13),
+    axis.title.y = element_text(size = 13),
+    plot.caption = element_text(hjust = 0.5, size = 11,
+                                margin = margin(t = 25)),
+    plot.margin = margin(20, 25, 15, 20)
+  )
+```
+
+**Discusión:** ¿Por qué la ausencia de la barra inicial de Z5 no implica que haya tenido cero puntos? ¿Qué se requiere antes de evaluar su evolución?
+
+# 3. Cambio absoluto y relativo del puntaje total
+
+El **cambio absoluto** se calcula como:
+
+$$
+\Delta P_i = P_{i,\text{seguimiento}}-P_{i,\text{inicial}}
+$$
+
+También distinguimos el cambio relativo a la medición inicial y el cambio en puntos porcentuales respecto al máximo teórico de 400:
+
+$$
+\text{Cambio relativo (\%)} = 100\frac{\Delta P}{P_{\text{inicial}}},
+\qquad
+\Delta pp_{400}=100\frac{\Delta P}{400}.
+$$
+
+```{r}
+#| label: calculo-delta-total
+agudelo_delta <- agudelo_totales %>%
+  select(centro, visita, puntaje_400) %>%
+  pivot_wider(names_from = visita, values_from = puntaje_400) %>%
+  mutate(
+    delta_P = Seguimiento - Inicial,
+    cambio_pct = if_else(!is.na(Inicial) & Inicial != 0,
+                         100 * delta_P / Inicial, NA_real_),
+    delta_pp_400 = 100 * delta_P / 400
+  ) %>%
+  arrange(centro)
+
+knitr::kable(agudelo_delta, digits = 2,
+             caption = "Cambios por centro; NA significa no calculable.")
+```
+
+```{r}
+#| label: grafica-delta-total
+#| fig-width: 10
+#| fig-height: 6
+ggplot(
+  agudelo_delta %>% mutate(centro = factor(centro, levels = paste0("Z", 1:5))),
+  aes(x = centro, y = delta_P)
+) +
+  geom_col(fill = "#087F8C", width = 0.6, na.rm = TRUE) +
+  geom_text(
+    aes(label = ifelse(is.na(delta_P), "", sprintf("%+.0f", delta_P))),
+    vjust = -0.5, size = 5, na.rm = TRUE
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.17))) +
+  labs(
+    title = "Cambio en el puntaje de salud pública",
+    subtitle = "Diferencia entre seguimiento y evaluación inicial",
+    x = "Centro zoológico",
+    y = expression(Delta * "P (puntos)"),
+    caption = "Z5: cambio no calculable debido a la ausencia de puntaje inicial"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    plot.caption = element_text(hjust = 0.5)
+  )
+```
+
+**Interpretación con los valores simulados facilitados:** Z3 gana **70 puntos**, equivalentes a **29.79 %** de su puntaje inicial (235) y a **17.5 puntos porcentuales** de la escala de 400. Son variaciones descriptivas; no implican causalidad.
+
+# 4. Cambios por concepto: perfiles de salud pública
+
+Los conceptos cuentan con un máximo de **80 puntos** en esta adaptación. Calcular \(\Delta P\) por concepto permite distinguir mejoras que un total global podría ocultar.
+
+```{r}
+#| label: calcular-delta-perfiles
+agudelo_delta_perfiles <- agudelo_perfiles %>%
+  select(centro, concepto, visita, puntos, maximo) %>%
+  pivot_wider(names_from = visita, values_from = puntos) %>%
+  mutate(
+    delta_P = Seguimiento - Inicial,
+    cambio_pct = if_else(!is.na(Inicial) & Inicial != 0,
+                         100 * delta_P / Inicial, NA_real_),
+    delta_pp = if_else(maximo > 0, 100 * delta_P / maximo, NA_real_)
+  ) %>%
+  arrange(concepto, centro)
+
+knitr::kable(agudelo_delta_perfiles, digits = 2,
+             caption = "Cambios por dimensión y centro.")
+```
+
+**Atención:** `cambio_pct` compara contra el valor inicial; `delta_pp` se expresa sobre el máximo del concepto. Si el valor inicial es cero o falta, el cambio relativo queda como `NA`.
+
+## Barras de cambio por concepto
+
+```{r}
+#| label: grafica-delta-perfiles
+#| fig-width: 11
+#| fig-height: 9
+ggplot(agudelo_delta_perfiles, aes(x = centro, y = delta_P)) +
+  geom_hline(yintercept = 0, color = "gray50", linewidth = 0.4) +
+  geom_col(aes(fill = delta_P >= 0), width = 0.65, na.rm = TRUE) +
+  geom_text(
+    aes(label = ifelse(is.na(delta_P), "", sprintf("%+.0f", delta_P))),
+    vjust = -0.4, size = 3.5, na.rm = TRUE
+  ) +
+  facet_wrap(~ concepto, ncol = 2, scales = "free_y") +
+  scale_fill_manual(
+    values = c("TRUE" = "#087F8C", "FALSE" = "#D55E00"),
+    labels = c("TRUE" = "Mejoría o sin cambio", "FALSE" = "Disminución"),
+    name = "Evolución"
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0.15, 0.22))) +
+  labs(
+    title = "Cambios en los perfiles de salud pública",
+    subtitle = "Seguimiento respecto a la evaluación inicial",
+    x = "Centro zoológico",
+    y = expression(Delta * "P (puntos)"),
+    caption = "Máximo por concepto: 80 puntos; NA = cambio no calculable"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5),
+    strip.text = element_text(face = "bold"),
+    panel.grid.major.x = element_blank(),
+    legend.position = "bottom"
+  )
+```
+
+## Matriz de calor
+
+En la matriz, el color expresa la magnitud y la dirección del cambio. **SD** identifica diferencias no calculables y no equivale a cero.
+
+```{r}
+#| label: matriz-calor
+#| fig-width: 11
+#| fig-height: 5.5
+ggplot(
+  agudelo_delta_perfiles,
+  aes(x = concepto, y = centro, fill = delta_P)
+) +
+  geom_tile(color = "white", linewidth = 1) +
+  geom_text(
+    aes(label = ifelse(is.na(delta_P), "SD", sprintf("%+.0f", delta_P))),
+    size = 4
+  ) +
+  scale_fill_gradient2(
+    low = "#D55E00", mid = "#F7F7F7", high = "#087F8C",
+    midpoint = 0, na.value = "grey85", name = expression(Delta * "P")
+  ) +
+  labs(
+    title = "Matriz de cambios en salud pública",
+    subtitle = "Diferencias por centro y concepto",
+    x = "Concepto evaluado", y = "Centro zoológico",
+    caption = "SD = Sin datos; positivos = mayor puntaje en el seguimiento"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    axis.text.x = element_text(angle = 35, hjust = 1),
+    panel.grid = element_blank()
+  )
+```
+
+# 5. Ejercicio 1: resolver con evidencia
+
+## Pregunta 1. Centro con mayor cambio calculable
+
+> Identifique el centro con mayor cambio calculable e indique cuántos puntos ganó.
+
+```{r}
+agudelo_delta %>%
+  filter(!is.na(delta_P)) %>%
+  arrange(desc(delta_P)) %>%
+  select(centro, Inicial, Seguimiento, delta_P, cambio_pct, delta_pp_400) %>%
+  slice_head(n = 1) %>%
+  knitr::kable(digits = 2)
+```
+
+**Respuesta orientativa:** Z3, con **+70 puntos** según los valores simulados compartidos. Distingue puntos absolutos, porcentaje relativo y puntos porcentuales de la escala.
+
+## Pregunta 2. ¿Por qué Z5 no tiene cambio calculable?
+
+> Explique por qué no se calcula el cambio de Z5. ¿Qué evidencia solicitaría?
+
+```{r}
+agudelo_totales %>%
+  filter(centro == "Z5") %>%
+  knitr::kable()
+
+# Localizar respuestas ausentes, independientemente de si son de Z5:
+a %>%
+  filter(is.na(respuesta) | is.na(puntos)) %>%
+  select(centro, visita, item, concepto, indicador,
+         instrumento, respuesta, puntos) %>%
+  knitr::kable()
+```
+
+**Guía:** si Z5 tiene 19 respuestas de 20 esperadas en la visita inicial y el total se codificó `NA`, no debe imputarse cero automáticamente. Solicita el cuestionario original, los registros de respaldo, la explicación del ítem ausente y el protocolo establecido para datos incompletos. Un **cero observado** y un **dato ausente** tienen significados distintos.
+
+## Pregunta 3. Dimensión inicial más débil de Z1
+
+> Consulte `01_agudelo_perfiles.csv`. Para Z1 en la visita inicial, identifique su dimensión con menor porcentaje y explique por qué el total no basta.
+
+```{r}
+# Mostrar todas las dimensiones, ordenadas de menor a mayor:
+z1_inicial <- agudelo_perfiles %>%
+  filter(centro == "Z1", visita == "Inicial") %>%
+  arrange(porcentaje)
+
+knitr::kable(z1_inicial, digits = 2)
+
+# Mostrar la(s) dimensión(es) mínima(s) sin confundir NA con mínimo:
+z1_inicial %>%
+  filter(!is.na(porcentaje)) %>%
+  slice_min(porcentaje, n = 1, with_ties = TRUE) %>%
+  select(concepto, puntos, maximo, porcentaje) %>%
+  knitr::kable(digits = 2)
+```
+
+**Guía:** el total resume desempeño, pero oculta desigualdades entre dimensiones. Dos centros con el mismo total pueden requerir acciones diferentes. En los valores parciales compartidos, *Conservación* tiene 25/80 (31.25 %), pero hay que consultar **todas** las dimensiones para confirmar si es la mínima.
+
+## Pregunta 4. Cuatro fuentes de información y corroboración
+
+> Proponga una pregunta para cada una de las cuatro fuentes de información y señale qué evidencia permitiría corroborar la respuesta.
+
+Primero, verifica **cuáles son realmente** las fuentes o instrumentos en este conjunto: no asumas que corresponden a cuatro fuentes determinadas sin inspeccionar `instrumento`.
+
+```{r}
+# Inventario de instrumentos existentes:
+a %>%
+  count(instrumento, name = "n_registros") %>%
+  knitr::kable()
+
+# Ejemplos de los indicadores evaluados por instrumento:
+a %>%
+  distinct(instrumento, concepto, indicador) %>%
+  arrange(instrumento, concepto, indicador) %>%
+  knitr::kable()
+```
+
+**Plantilla de respuesta (completar en clase):**
+
+| Instrumento real del CSV | Pregunta específica | Evidencia comprobable |
+|---|---|---|
+| Fuente 1: __________ | __________ | __________ |
+| Fuente 2: __________ | __________ | __________ |
+| Fuente 3: __________ | __________ | __________ |
+| Fuente 4: __________ | __________ | __________ |
+
+A manera de **ejemplos metodológicos, no fuentes confirmadas del archivo**: a un director/MVZ se le podría preguntar por los registros de enfermedad y mortalidad (corroborar con expedientes y reportes); al personal de manejo, por el cumplimiento de limpieza y desinfección (bitácoras y observación); mediante inspección directa, por las barreras de aislamiento (lista de verificación y fotografías); y en una revisión documental, por el programa de medicina preventiva (protocolos y constancias de ejecución). **Sustituye estas fuentes por las que realmente aparezcan en `a`.**
+
+# 6. Reflexión crítica y cierre
+
+1. **Describir:** ¿qué cambió entre las dos visitas y en qué magnitud?
+2. **Diagnosticar:** ¿qué dimensiones presentan rezagos aunque el puntaje total haya aumentado?
+3. **Verificar:** ¿qué evidencia independiente respalda las respuestas e indicadores?
+4. **Inferir con cautela:** ¿qué información adicional haría falta para atribuir el cambio a una intervención y no a otros factores?
+
+**Limitaciones:** el análisis utiliza datos simulados, un instrumento docente no validado y solo dos momentos de observación. Un mayor puntaje no demuestra automáticamente menor incidencia de enfermedad, menor exposición ni eficacia causal de medidas de bioseguridad. Los valores faltantes se mantienen como `NA`; no se imputan sin un criterio documentado.
+
+## Exportación opcional de resultados
+
+```{r}
+#| eval: false
+# Ejecuta manualmente si deseas guardar tablas en tu proyecto:
+readr::write_csv(agudelo_delta, "resultados_delta_totales.csv")
+readr::write_csv(agudelo_delta_perfiles, "resultados_delta_perfiles.csv")
+```

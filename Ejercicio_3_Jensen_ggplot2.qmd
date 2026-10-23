@@ -1,0 +1,374 @@
+---
+title: "Ejercicio 3 | Jensen: medidas de bioseguridad en terrarios"
+subtitle: "Diseño pareado, trazador UV y análisis de medidas repetidas · datos simulados"
+lang: es
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    theme: cosmo
+    code-fold: false
+    embed-resources: true
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+> **Contexto:** práctica computacional con datos simulados del repositorio `bioseguridad-zoologicos-R`. Los valores UV no son microorganismos, infecciones ni estimaciones directas de eficacia sanitaria. Abra `bioseguridad-zoologicos.Rproj` antes de ejecutar. Este archivo no necesita ejecutar el simulador ni modificar los CSV originales.
+
+## Objetivos
+
+1. Reconocer el diseño de **10 cuidadores × 4 escenarios × 10 terrarios × 4 superficies = 1,600 registros**.
+2. Evitar pseudorreplicación conservando el emparejamiento por cuidador.
+3. Construir comparaciones gráficas con `ggplot2`.
+4. Calcular tamaños de diferencia, reducción de medias y pruebas de Friedman y Wilcoxon con ajuste de Holm.
+5. Interpretar cinco preguntas del Ejercicio 3 y las limitaciones del trazador.
+
+## 1. Cargar librerías y datos
+
+```{r}
+if (!requireNamespace("pacman", quietly = TRUE)) install.packages("pacman")
+pacman::p_load(ggplot2, tidyverse, knitr)
+
+archivo_uv <- "datos/jensen_uv.csv"
+archivo_orden <- "datos/jensen_orden_ensayos.csv"
+if (!file.exists(archivo_uv)) {
+  stop("No se encuentra datos/jensen_uv.csv. Abra el proyecto .Rproj desde su raíz.")
+}
+j <- readr::read_csv(archivo_uv, show_col_types = FALSE)
+orden <- if (file.exists(archivo_orden)) {
+  readr::read_csv(archivo_orden, show_col_types = FALSE)
+} else NULL
+
+escenarios <- c("Control", "Guantes", "Utensilios", "Combinados")
+j <- j %>%
+  mutate(
+    escenario = factor(escenario, levels = escenarios),
+    cuidador = factor(cuidador),
+    terrario = as.integer(terrario)
+  )
+glimpse(j)
+if (!is.null(orden)) print(head(orden, 8))
+```
+
+## 2. Verificar la estructura experimental
+
+- Terrarios **1–2**: controles previos.
+- Terrario **3**: fuente del trazador.
+- Terrarios **4–10**: receptores que integran el desenlace primario.
+- Superficies: pared, refugio, sustrato y bebedero, cada una de **0 a 3**.
+- Máximo por cuidador y escenario: $7\times4\times3=84$.
+
+| Escenario | Guantes entre terrarios | Esponja |
+|---|---|---|
+| Control | No cambiados | Compartida |
+| Guantes | Cambiados | Compartida |
+| Utensilios | No cambiados | Dedicada a cada terrario |
+| Combinados | Cambiados | Dedicada a cada terrario |
+
+```{r}
+stopifnot(
+  nrow(j) == 1600L,
+  all(c("cuidador", "escenario", "terrario", "superficie", "puntaje_uv") %in% names(j)),
+  !anyNA(j[, c("cuidador", "escenario", "terrario", "superficie", "puntaje_uv")]),
+  all(j$puntaje_uv >= 0 & j$puntaje_uv <= 3),
+  length(unique(j$cuidador)) == 10,
+  !anyDuplicated(j[c("cuidador", "escenario", "terrario", "superficie")])
+)
+j %>%
+  count(escenario, name = "registros_superficie") %>%
+  knitr::kable()
+j %>%
+  count(cuidador, escenario) %>%
+  count(n, name = "ensayos") %>%
+  knitr::kable()
+```
+
+**Pausa didáctica:** ¿por qué 1,600 observaciones de superficies no constituyen 1,600 ensayos independientes?
+
+## 3. Construir el resultado principal (0–84) por cuidador y escenario
+
+```{r}
+receptores <- j %>% filter(between(terrario, 4, 10))
+
+jensen_totales <- receptores %>%
+  group_by(cuidador, escenario) %>%
+  summarise(
+    superficies = n(),
+    total_uv = if (anyNA(puntaje_uv)) NA_real_ else sum(puntaje_uv),
+    .groups = "drop"
+  )
+
+stopifnot(
+  nrow(jensen_totales) == 40,
+  all(jensen_totales$superficies == 28),
+  all(between(jensen_totales$total_uv, 0, 84))
+)
+
+resumen_jensen <- jensen_totales %>%
+  group_by(escenario) %>%
+  summarise(
+    n_cuidadores = n_distinct(cuidador),
+    media = mean(total_uv),
+    mediana = median(total_uv),
+    desviacion = sd(total_uv),
+    minimo = min(total_uv),
+    maximo = max(total_uv),
+    .groups = "drop"
+  )
+knitr::kable(resumen_jensen, digits = 2)
+```
+
+## 4. Figura principal: trayectorias pareadas
+
+Cada línea gris representa **el mismo cuidador** bajo cuatro medidas. La línea turquesa es la media del grupo; no constituye una observación adicional.
+
+```{r, fig-width=10, fig-height=6}
+ggplot(jensen_totales, aes(x = escenario, y = total_uv, group = cuidador)) +
+  geom_line(color = "#94A3B8", alpha = .65, linewidth = .6) +
+  geom_point(color = "#94A3B8", alpha = .7, size = 2) +
+  geom_line(
+    data = resumen_jensen,
+    aes(x = escenario, y = media, group = 1),
+    inherit.aes = FALSE, color = "#087F8C", linewidth = 1.6
+  ) +
+  geom_point(
+    data = resumen_jensen,
+    aes(x = escenario, y = media),
+    inherit.aes = FALSE, color = "#087F8C", size = 3.8
+  ) +
+  scale_y_continuous(limits = c(0, 84), breaks = seq(0, 84, 12)) +
+  labs(
+    title = "Transferencia de trazador UV: comparación pareada | SIMULADO",
+    subtitle = "10 cuidadores medidos en los cuatro escenarios",
+    x = "Escenario", y = "Puntaje UV en receptores (0–84)",
+    caption = "Líneas grises: cuidadores; turquesa: media por escenario."
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(panel.grid.major.x = element_blank())
+```
+
+## 5. Figura complementaria: distribución de puntajes
+
+```{r, fig-width=9, fig-height=5}
+ggplot(jensen_totales, aes(escenario, total_uv, fill = escenario)) +
+  geom_boxplot(alpha = .35, outlier.shape = NA, width = .62) +
+  geom_jitter(width = .10, height = 0, alpha = .8, size = 2) +
+  scale_fill_manual(values = c(
+    Control = "#D97706", Guantes = "#2563EB",
+    Utensilios = "#7C3AED", Combinados = "#087F8C"
+  )) +
+  scale_y_continuous(limits = c(0, 84), breaks = seq(0, 84, 12)) +
+  labs(title = "Distribución de los totales UV por escenario",
+       x = NULL, y = "Puntaje UV (0–84)") +
+  theme_classic(base_size = 13) +
+  theme(legend.position = "none")
+```
+
+## 6. Diferencia y reducción relativa respecto al control
+
+Definiciones:
+
+$$\Delta = \overline{UV}_{intervención}-\overline{UV}_{control}$$
+
+$$Reducción\ (\%) =
+100\left(1-\frac{\overline{UV}_{intervención}}{\overline{UV}_{control}}\right)$$
+
+Una diferencia negativa indica **menos trazador** bajo la intervención. La reducción de medias **no** es la media de porcentajes individuales.
+
+```{r}
+control_media <- resumen_jensen %>%
+  filter(escenario == "Control") %>%
+  pull(media)
+
+comparacion_medias <- resumen_jensen %>%
+  mutate(
+    diferencia_control = media - control_media,
+    reduccion_medias_pct = if_else(
+      control_media > 0,
+      100 * (1 - media / control_media),
+      NA_real_
+    )
+  )
+knitr::kable(comparacion_medias, digits = 2)
+```
+
+```{r, fig-width=9, fig-height=5}
+comparacion_medias %>%
+  filter(escenario != "Control") %>%
+  mutate(posicion_etiqueta = if_else(diferencia_control < 0, 1.5, -0.6)) %>%
+  ggplot(aes(escenario, diferencia_control, fill = diferencia_control < 0)) +
+  geom_hline(yintercept = 0, color = "#475569") +
+  geom_col(width = .63) +
+  geom_text(aes(label = sprintf("%+.1f", diferencia_control),
+                vjust = posicion_etiqueta),
+            color = "black", size = 4.2) +
+  scale_fill_manual(values = c("TRUE" = "#087F8C", "FALSE" = "#D55E00")) +
+  scale_y_continuous(expand = expansion(mult = c(.17, .20))) +
+  labs(title = "Diferencia media frente al control",
+       subtitle = "Intervención menos control; valores negativos = menos UV",
+       x = "Intervención", y = "Cambio en puntos UV (0–84)") +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "none")
+```
+
+## 7. Recorrido por los diez terrarios
+
+Aquí se muestran todas las posiciones para comprender la secuencia, **sin** incluir controles y fuente en el total principal.
+
+```{r}
+por_terrario <- j %>%
+  group_by(cuidador, escenario, terrario) %>%
+  summarise(uv_terrario = sum(puntaje_uv), .groups = "drop")
+recorrido <- por_terrario %>%
+  group_by(escenario, terrario) %>%
+  summarise(media_uv = mean(uv_terrario), .groups = "drop")
+```
+
+```{r, fig-width=10, fig-height=5.8}
+ggplot(recorrido, aes(terrario, media_uv, color = escenario, group = escenario)) +
+  annotate("rect", xmin = 3.5, xmax = 10.5, ymin = -Inf, ymax = Inf,
+           fill = "#E0F2FE", alpha = .35) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.4) +
+  geom_vline(xintercept = 3, linetype = "dashed", color = "#64748B") +
+  scale_color_manual(values = c(
+    Control = "#D97706", Guantes = "#2563EB",
+    Utensilios = "#7C3AED", Combinados = "#087F8C"
+  )) +
+  scale_x_continuous(breaks = 1:10) +
+  scale_y_continuous(limits = c(0, 12), breaks = seq(0, 12, 2)) +
+  labs(title = "Recorrido del trazador por terrario | SIMULADO",
+       subtitle = "Controles previos 1–2 · Fuente 3 · Receptores 4–10",
+       x = "Número del terrario", y = "Media UV por terrario (0–12)",
+       color = "Escenario",
+       caption = "El desenlace principal solo incorpora terrarios 4–10.") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom")
+```
+
+## 8. Contrastes estadísticos para medidas repetidas
+
+**Friedman:** comparación global de los cuatro escenarios por cuidador. **Wilcoxon pareado:** compara cada intervención con Control; **Holm:** ajusta los tres valores p. Se usa aproximación asintótica (`exact = FALSE`), por lo que los empates y el tamaño de muestra pequeño requieren cautela.
+
+```{r}
+prueba_friedman <- friedman.test(
+  total_uv ~ escenario | cuidador,
+  data = jensen_totales
+)
+prueba_friedman
+```
+
+```{r}
+tabla_pares <- jensen_totales %>%
+  mutate(escenario = as.character(escenario)) %>%
+  pivot_wider(names_from = escenario, values_from = total_uv)
+
+comparaciones <- purrr::map_dfr(
+  escenarios[-1],
+  function(esc) {
+    delta <- tabla_pares[[esc]] - tabla_pares[["Control"]]
+    p <- if (all(delta == 0)) 1 else
+      wilcox.test(delta, mu = 0, exact = FALSE)$p.value
+
+    tibble(
+      escenario = esc,
+      n_pares = sum(!is.na(delta)),
+      diferencia_media = mean(delta),
+      diferencia_mediana = median(delta),
+      reduccion_medias_pct = if (mean(tabla_pares[["Control"]]) > 0)
+        100 * (1 - mean(tabla_pares[[esc]]) / mean(tabla_pares[["Control"]]))
+      else NA_real_,
+      p_sin_ajuste = p
+    )
+  }
+) %>%
+  mutate(p_holm = p.adjust(p_sin_ajuste, method = "holm"))
+
+knitr::kable(comparaciones, digits = 5)
+```
+
+```{r, fig-width=9, fig-height=5}
+ggplot(
+  comparaciones %>% mutate(posicion_etiqueta = if_else(reduccion_medias_pct >= 0, -0.5, 1.5)),
+  aes(x = escenario, y = reduccion_medias_pct)
+) +
+  geom_hline(yintercept = 0, linewidth = .4) +
+  geom_col(fill = "#087F8C", width = .65) +
+  geom_text(aes(label = paste0(round(reduccion_medias_pct, 1), "%"),
+                vjust = posicion_etiqueta),
+            size = 4) +
+  scale_y_continuous(expand = expansion(mult = c(.18, .2))) +
+  labs(title = "Reducción relativa de medias UV frente al control",
+       x = "Intervención", y = "Reducción (%)",
+       caption = "Reducción UV ≠ reducción demostrada de infección.") +
+  theme_minimal(base_size = 12)
+```
+
+**Precaución:** que `p_holm` no resulte pequeño **no demuestra equivalencia**. La equivalencia requiere márgenes definidos previamente y un diseño específico. El experimento simulado no debe utilizarse para recomendar una eficacia clínica comprobada.
+
+## 9. Ejercicio 3: preguntas para trabajar en clase
+
+### Pregunta 1. ¿Por qué 1,600 superficies no son 1,600 cuidadores independientes?
+
+```{r}
+j %>% summarise(
+  registros = n(),
+  cuidadores = n_distinct(cuidador),
+  escenarios = n_distinct(escenario),
+  terrarios = n_distinct(terrario),
+  superficies = n_distinct(superficie)
+) %>% knitr::kable()
+```
+
+**Explique:** las observaciones dentro del mismo cuidador y escenario comparten condiciones del ensayo; son mediciones anidadas, no sujetos independientes.
+
+### Pregunta 2. ¿Qué escenario tiene menor media? ¿Cuál es su diferencia y reducción relativa?
+
+```{r}
+comparacion_medias %>%
+  arrange(media) %>%
+  slice(1) %>%
+  knitr::kable(digits = 2)
+```
+
+### Pregunta 3. Compare diferencias y `p_holm`. ¿No significativo significa equivalente?
+
+```{r}
+comparaciones %>%
+  select(escenario, diferencia_media, reduccion_medias_pct, p_holm) %>%
+  knitr::kable(digits = 5)
+```
+
+**Discuta:** magnitud y dirección de cambios, variabilidad, incertidumbre y multiplicidad.
+
+### Pregunta 4. ¿Por qué excluir terrarios 1–3 del total de 84?
+
+```{r}
+j %>%
+  mutate(tipo = case_when(
+    terrario <= 2 ~ "Controles previos",
+    terrario == 3 ~ "Fuente",
+    TRUE ~ "Receptores"
+  )) %>%
+  count(tipo) %>%
+  knitr::kable()
+```
+
+**Razone:** el desenlace principal es el depósito posterior del trazador en los receptores. Controles previos y fuente cumplen funciones experimentales diferentes.
+
+### Pregunta 5. Mencione dos limitaciones del trazador para inferir enfermedad
+
+El trazador UV no permite inferir por sí mismo:
+
+- Identidad ni viabilidad de un agente infeccioso.
+- Dosis infectante, susceptibilidad del hospedador, infección o enfermedad.
+
+## 10. Conclusión integradora
+
+Redacte un párrafo que incluya: medida con menor transferencia simulada, magnitud del cambio, significado del valor p ajustado, límites del diseño y una recomendación verificable (procedimiento, responsable, indicador y plazo).
+
+**Producto sugerido:** tabla resumen, gráfica pareada, gráfica del recorrido, comparaciones estadísticas y respuestas de las cinco preguntas.
+
+**Fuentes:** Jensen, Jensen y Bertelsen (2021), *Assessing the effects of biosecurity measures in terrarium management*. DOI: 10.19227/jzar.v9i3.470. Consulte `docs/metodologia_y_fuentes.md` para las diferencias entre el artículo y esta simulación.
